@@ -1,0 +1,181 @@
+#!/usr/bin/perl
+# synchronize directories based on find(1)
+# find foo -printf "%y %Ts %m %p\n"
+# its meant to be simple, not particularly efficient. if you rename a
+# directory, cync will delete the old one and transfer the new one. if you
+# make a small change to a large file, the whole file will be
+# transferred. it works one way. if you need to do two way synchronization,
+# use git or rsync. this will never touch the source directory, only
+# the destination will be changed.
+
+use Getopt::Long;
+use Data::Dumper;
+use strict;
+use warnings;
+
+my ($noact, $src, $src_host, $src_loc, $dest, $dest_host, $dest_loc, @find_args);
+parse_options() or usage();
+
+find_differences();
+
+sub find_differences {
+    my $src_files = find($src, $src_host, $src_loc);
+    my $dest_files = find($dest, $dest_host, $dest_loc);
+    my %processed;
+    for my $name (sort keys %$src_files, keys %$dest_files) {
+        next if $processed{$name}++;
+        sync($name, $src_files->{$name}, $dest_files->{$name});
+    }
+}
+
+sub sync {
+    my ($name, $a, $b) = @_;
+    rm($name, $a, $b);
+    cp($name, $a, $b);
+    ln($name, $a, $b);
+    makedir($name, $a, $b);
+    chmode($name, $a, $b);
+    touch($name, $a, $b);
+}
+
+sub mysystem {
+    print STDERR "@_\n";
+    return if $noact;
+    system @_;
+    exit if $?>>8;
+}
+
+sub rm {
+    my ($name, $a, $b) = @_;
+    return if !$b || $a && $a->{type} eq $b->{type};
+    if ($dest_host) {
+        mysystem "ssh", $dest_host, "rm", "-r", "$dest_loc$name";
+    }
+    else {
+        mysystem "rm", "-r", "$dest$name";
+    }
+}
+
+sub cp {
+    my ($name, $a, $b) = @_;
+    return if !$a;
+    return if $a->{type} ne "f";
+    return if $b && $b->{mtime} eq $a->{mtime};
+    $a->{synced} = 1;
+    if ($src_host || $dest_host) {
+        mysystem "scp", "$src$name", "$dest$name";
+    }
+    else {
+        mysystem "cp", "$src$name", "$dest$name";
+    }
+}
+
+sub ln {
+    my ($name, $a, $b) = @_;
+    return if !$a;
+    return if $a->{type} ne "l";
+    return if $b && $b->{target} eq $a->{target};
+    $a->{synced} = 1;
+    if ($dest_host) {
+        mysystem "ssh", $dest_host, "ln", "-s", $a->{target}, "$dest_loc$name";
+    }
+    else {
+        mysystem "ln", "-s", $a->{target}, "$dest$name";
+    }
+}
+
+sub makedir {
+    my ($name, $a, $b) = @_;
+    return if !$a;
+    return if $a->{type} ne "d";
+    return if $b;
+    $a->{synced} = 1;
+    if ($dest_host) {
+        mysystem "ssh", $dest_host, "mkdir", "$dest_loc$name";
+    }
+    else {
+        mysystem "mkdir", "$dest$name";
+    }
+}
+
+sub chmode {
+    my ($name, $a, $b) = @_;
+    return if !$a;
+    return if $a->{type} eq "l";
+    return if !$a->{synced} && $b && $b->{mode} eq $a->{mode};
+    $a->{synced} = 1;
+    if ($dest_host) {
+        mysystem "ssh", $dest_host, "chmod", $a->{mode}, "$dest_loc$name";
+    }
+    else {
+        mysystem "chmod", $a->{mode}, "$dest$name";
+    }
+}
+
+sub touch {
+    my ($name, $a, $b) = @_;
+    return if !$a;
+    return if !$a->{synced};
+    return if $a->{type} eq "l";
+    if ($dest_host) {
+        mysystem "ssh", $dest_host, "touch", "-d", "\@$a->{mtime}", "$dest_loc$name";
+    }
+    else {
+        mysystem "touch", "-d", "\@$a->{mtime}", "$dest$name";
+    }
+}
+
+sub find {
+    my ($ref, $host, $loc) = @_;
+    my %files;
+    my @cmd;
+    if ($host) {
+        @cmd = ("ssh", $host, "find", $loc, @find_args);
+    }
+    else {
+        @cmd = ("find", $ref, @find_args);
+    }
+    print STDERR "@cmd\n";
+    push @cmd, "-printf", "%y %Ts %m \\0%p\\0 \\0%l\\0\\n";
+    open my $fh, "-|", @cmd;
+    while (<$fh>) {
+        my ($type, $mtime, $mode, $name, $target) =
+            /(.) (\d+) (\d+) \0(.+)\0 \0(.*)\0/ or next;
+        $name =~ s{^\Q$ref\E?}{};
+        $files{$name} = {
+            type => $type, mtime => $mtime, mode => $mode, target => $target,
+        };
+    }
+    close $fh;
+    return \%files;
+}
+
+sub parse_options {
+    GetOptions(
+        noact => \$noact,
+        '<>' => sub {$src = $_[0]; die "!FINISH"})
+        or return;
+    $dest = shift @ARGV;
+    return if !$src || !$dest;
+    ($src, $src_host, $src_loc) = parse_ref($src);
+    ($dest, $dest_host, $dest_loc) = parse_ref($dest);
+    @find_args = @ARGV;
+    return 1;
+}
+
+sub parse_ref {
+    my ($ref) = @_;
+    $ref =~ s{/*$}{}g;
+    my ($host, $loc);
+    if ($ref =~ /([^:]+):(.*)/) {
+        $host = $1;
+        $loc = $2;
+    }
+    return ($ref, $host, $loc);
+}
+
+sub usage {
+    print "Usage: $0 [-n] <src> <dest> [find-args]\n";
+    exit;
+}
+
