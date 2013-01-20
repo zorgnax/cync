@@ -23,7 +23,7 @@ The source or destination can be a ssh host:file.
 
 Nice because find(1) lets you include or exclude whatever files you
 need with a fairly complete syntax. Dont include the action (print of
-the results), that will be generated for the program.
+the results), that will be generated for the program by the program.
 
 It's meant to be simple, not particularly efficient: If you rename a
 directory, this will delete the old one and transfer the new one. if
