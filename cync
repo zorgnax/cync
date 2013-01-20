@@ -74,16 +74,6 @@ sub find {
     return \%files;
 }
 
-sub sync {
-    my ($name, $a, $b) = @_;
-    rm($name, $a, $b);
-    cp($name, $a, $b);
-    ln($name, $a, $b);
-    makedir($name, $a, $b);
-    chmode($name, $a, $b);
-    touch($name, $a, $b);
-}
-
 sub mysystem {
     my ($ref, @cmd) = @_;
     unshift @cmd, "ssh", $ref->{host} if $ref && $ref->{host};
@@ -93,54 +83,32 @@ sub mysystem {
     exit($?>>8) if $?>>8;
 }
 
-sub rm {
+sub sync {
     my ($name, $a, $b) = @_;
-    return if !$b || $a && $a->{type} eq $b->{type};
-    mysystem $dest, "rm", "-r", "$dest->{file}$name";
-}
-
-sub cp {
-    my ($name, $a, $b) = @_;
+    if ($b && (!$a || $a->{type} ne $b->{type})) {
+        mysystem $dest, "rm", "-r", "$dest->{file}$name";
+    }
     return if !$a;
-    return if $a->{type} ne "f";
-    return if $b && $b->{mtime} eq $a->{mtime};
-    $a->{synced} = 1;
-    my $cp = $src->{host} || $dest->{host} ? "scp" : "cp";
-    mysystem undef, $cp, "$src->{ref}$name", "$dest->{ref}$name";
-}
-
-sub ln {
-    my ($name, $a, $b) = @_;
-    return if !$a;
-    return if $a->{type} ne "l";
-    return if $b && $b->{target} eq $a->{target};
-    $a->{synced} = 1;
-    mysystem $dest, "ln", "-s", $a->{target}, "$dest->{file}$name";
-}
-
-sub makedir {
-    my ($name, $a, $b) = @_;
-    return if !$a;
-    return if $a->{type} ne "d";
-    return if $b;
-    $a->{synced} = 1;
-    mysystem $dest, "mkdir", "$dest->{file}$name";
-}
-
-sub chmode {
-    my ($name, $a, $b) = @_;
-    return if !$a;
-    return if $a->{type} eq "l";
-    return if !$a->{synced} && $b && $b->{mode} eq $a->{mode};
-    $a->{synced} = 1;
-    mysystem $dest, "chmod", $a->{mode}, "$dest->{file}$name";
-}
-
-sub touch {
-    my ($name, $a, $b) = @_;
-    return if !$a;
-    return if !$a->{synced};
-    return if $a->{type} eq "l";
-    mysystem $dest, "touch", "-d", "\@$a->{mtime}", "$dest->{file}$name";
+    my $synced;
+    if ($a->{type} eq "f" && (!$b || $b->{mtime} ne $a->{mtime})) {
+        my $cp = $src->{host} || $dest->{host} ? "scp" : "cp";
+        mysystem undef, $cp, "$src->{ref}$name", "$dest->{ref}$name";
+        $synced = 1;
+    }
+    elsif ($a->{type} eq "l" && (!$b || $b->{target} ne $a->{target})) {
+        mysystem $dest, "ln", "-s", $a->{target}, "$dest->{file}$name";
+        return;
+    }
+    elsif ($a->{type} eq "d" && !$b) {
+        mysystem $dest, "mkdir", "$dest->{file}$name";
+        $synced = 1;
+    }
+    if ($synced || !$b || $b->{mode} ne $a->{mode}) {
+        mysystem $dest, "chmod", $a->{mode}, "$dest->{file}$name";
+        $synced = 1;
+    }
+    if ($synced) {
+        mysystem $dest, "touch", "-d", "\@$a->{mtime}", "$dest->{file}$name";
+    }
 }
 
