@@ -1,13 +1,4 @@
 #!/usr/bin/perl
-# synchronize directories based on find(1)
-
-# its meant to be simple, not particularly efficient. if you rename a
-# directory, this will delete the old one and transfer the new one. if you
-# make a small change to a large file, the whole file will be
-# transferred. it works one way. if you need to do two way synchronization,
-# use git or rsync. this will never touch the source directory, only
-# the destination will be changed.
-
 use Getopt::Long;
 use Data::Dumper;
 use strict;
