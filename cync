@@ -49,9 +49,9 @@ sub find {
     my ($ref) = @_;
     my %files;
     my @cmd = ("find", $ref->{file}, @find_args);
+    push @cmd, "-printf", "\"%y %Ts %m \\0%p\\0 \\0%l\\0\\n\"";
     unshift @cmd, "ssh", $ref->{host} if $ref->{host};
     print STDERR "@cmd\n";
-    push @cmd, "-printf", "%y %Ts %m \\0%p\\0 \\0%l\\0\\n";
     open my $fh, "-|", @cmd;
     while (<$fh>) {
         my ($type, $mtime, $mode, $name, $target) =
